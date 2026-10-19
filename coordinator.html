@@ -24,6 +24,7 @@ textarea{min-height:60px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
 button{cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:9px 14px;font-weight:600}
 button.primary{background:var(--moss);border-color:var(--moss);color:var(--moss-ink)}
+a{color:var(--moss)}
 button.link{border:0;background:none;padding:0;color:var(--clay);text-decoration:underline;font-weight:500}
 .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .tabs button[aria-pressed=true]{background:var(--moss);color:var(--moss-ink);border-color:var(--moss)}
@@ -96,7 +97,10 @@ th{color:var(--mute);font-weight:600}
       if (f.on_time != null) { onTimeKnown++; if (f.on_time) onTime++; }
       if (l && f.rejected_crates != null && f.cheap_crates != null) { crates += l.crates; lost += f.rejected_crates + f.cheap_crates; }
     });
+    var tried = D.phone_sessions.filter(function (x) { return x.reached_post; }), finished = tried.filter(function (x) { return x.completed; });
     return {
+      newReq: D.enquiries.filter(function (e) { return !e.handled; }).length,
+      phone: tried.length ? finished.length + ' of ' + tried.length : '-',
       posted: posted, shown: shown, committed: committed,
       rate: posted ? Math.round(100 * committed / posted) + '%' : '-',
       lead: lead.length ? (lead.reduce(function (a, b) { return a + b; }, 0) / lead.length).toFixed(1) + ' days' : '-',
@@ -107,6 +111,30 @@ th{color:var(--mute);font-weight:600}
 
   /* ---------- CSV export (codes only: no names, no phone numbers) ---------- */
   function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function rowsToCsv(rows) { return '\ufeff' + rows.map(function (r) { return r.map(csvCell).join(','); }).join('\r\n'); }
+  function saveCsv(prefix, text) {
+    var blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = prefix + '-' + today() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  function requestsCsv() {
+    var codes = listingCodes();
+    var rows = [['request_date', 'listing_code', 'farmer_code', 'variety', 'crates_requested', 'buyer_intent', 'handled', 'message']];
+    D.enquiries.forEach(function (e) {
+      var l = byId(D.listings, e.listing_id) || {}, f = byId(D.farmers, l.farmer_id) || {};
+      rows.push([(e.created_at || '').slice(0, 10), codes[e.listing_id], f.code, l.variety, e.crates, e.intent, e.handled ? 'yes' : 'no', e.message]);
+    });
+    return rowsToCsv(rows);
+  }
+  function phoneCsv() {
+    var rows = [['date', 'farmer_code', 'channel', 'tried_to_post', 'finished', 'seconds', 'wrong_keys', 'back_presses', 'screens', 'variety', 'crates', 'price', 'ready_date', 'listing_created', 'coordinator_note']];
+    D.phone_sessions.forEach(function (x) {
+      rows.push([(x.created_at || '').slice(0, 10), x.farmer_code, x.channel, x.reached_post ? 'yes' : 'no', x.completed ? 'yes' : 'no', x.duration_s,
+        x.invalid_count, x.back_count, x.steps, x.variety, x.crates, x.price, x.ready, x.listing_id ? 'yes' : 'no', x.note]);
+    });
+    return rowsToCsv(rows);
+  }
+  function median(a) { if (!a.length) return null; a = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; }
   function buildCsv() {
     var codes = listingCodes();
     var head = ['listing_code', 'farmer_code', 'town', 'variety', 'crates', 'price_per_crate', 'ready_date', 'posted_by', 'listing_created',
@@ -127,11 +155,7 @@ th{color:var(--mute);font-weight:600}
     });
     return '﻿' + rows.map(function (r) { return r.map(csvCell).join(','); }).join('\r\n');
   }
-  function download() {
-    var blob = new Blob([buildCsv()], { type: 'text/csv;charset=utf-8' });
-    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'harvestlink-test-' + today() + '.csv';
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-  }
+  function download() { saveCsv('harvestlink-test', buildCsv()); }
 
   /* ---------- views ---------- */
   function noteHtml() { return note ? '<div class="msg ' + note.kind + '" role="status">' + esc(note.text) + '</div>' : ''; }
@@ -147,12 +171,15 @@ th{color:var(--mute);font-weight:600}
   function statHtml(label, val) { return '<div class="stat"><b>' + esc(val) + '</b><span class="muted small">' + esc(label) + '</span></div>'; }
   function dashboardView() {
     var m = metrics();
-    var tabs = [['farmers', '1 Farmers'], ['listings', '2 Listings'], ['buyers', '3 Buyers'], ['answers', '4 Buyer answers'], ['followup', '5 Follow-up'], ['export', 'Export']];
+    var tabs = [['farmers', '1 Farmers'], ['listings', '2 Listings'], ['buyers', '3 Buyers'], ['answers', '4 Buyer answers'], ['followup', '5 Follow-up'],
+      ['requests', 'Requests' + (m.newReq ? ' (' + m.newReq + ' new)' : '')], ['phone', 'Phone tests'], ['export', 'Export']];
     app.innerHTML = noteHtml() +
+      (D.needsSchema2 ? '<div class="msg err" role="alert">Part 2 of the database is not set up yet. Run schema-2.sql in Supabase (SETUP.md, step 7). Until then, buyer requests from the public page and the phone-test log will not work.</div>' : '') +
       '<div class="card"><h2>Test so far</h2><div class="stats">' +
       statHtml('harvests posted', m.posted) + statHtml('shown to a buyer', m.shown) + statHtml('committed before ready date', m.committed) +
       statHtml('commitment rate', m.rate) + statHtml('average lead time', m.lead) + statHtml('followed up', m.followed) +
-      statHtml('harvested on time', m.onTime) + statHtml('unsold or sold cheap', m.lost) + '</div>' +
+      statHtml('harvested on time', m.onTime) + statHtml('unsold or sold cheap', m.lost) +
+      statHtml('new buyer requests', m.newReq) + statHtml('phone posts finished', m.phone) + '</div>' +
       '<p class="muted small">Small numbers show direction, not proof. Report counts, not just percentages.</p></div>' +
       '<div class="tabs" role="group" aria-label="Sections">' + tabs.map(function (t) { return '<button type="button" data-tab="' + t[0] + '" aria-pressed="' + (tab === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
       '<div id="panel"></div>';
@@ -221,9 +248,42 @@ th{color:var(--mute);font-weight:600}
         '<label for="uw">Would you use this again?</label><textarea id="uw" maxlength="500"></textarea><label for="ux">What would you change?</label><textarea id="ux" maxlength="500"></textarea>' +
         '<p><button class="primary" type="submit">Save follow-up</button></p></form><p class="muted small">Saving again for the same harvest updates it.</p></div>';
     }
+    if (tab === 'requests') {
+      var cq = listingCodes(), rq = D.enquiries.slice().sort(function (a, b) { return a.created_at < b.created_at ? 1 : -1; });
+      return '<div class="card"><h2>Buyer requests (' + rq.length + ')</h2>' +
+        '<p class="muted small">Sent from the public page; the buyer agreed to be called. Call them, then add them under Buyers (read the consent text aloud) and record their answer under Buyer answers. “Wants to commit” is only what the buyer typed. It is not a commitment until you have confirmed crates, price and date with them.</p>' +
+        '<div class="scroll"><table><tr><th>Received</th><th>Harvest</th><th>Buyer</th><th>Phone</th><th>Crates</th><th>Intent</th><th>Message</th><th></th></tr>' +
+        (rq.length ? rq.map(function (e) {
+          return '<tr><td>' + esc((e.created_at || '').slice(0, 10)) + '</td><td>' + esc(cq[e.listing_id]) + '</td><td>' + esc(e.buyer_name) + '</td><td>' +
+            (e.buyer_phone ? '<a href="tel:' + esc(e.buyer_phone) + '">' + esc(e.buyer_phone) + '</a>' : '-') + '</td><td>' + e.crates + '</td><td>' +
+            esc(e.intent === 'commit' ? 'wants to commit' : e.intent === 'info' ? 'wants to know more' : '-') + '</td><td>' + esc(e.message) + '</td><td>' +
+            (e.handled ? '<span class="pill">handled</span> <button class="link" type="button" data-handled="' + esc(e.id) + '" data-to="false">undo</button>'
+                       : '<button class="link" type="button" data-handled="' + esc(e.id) + '" data-to="true">Mark handled</button>') + '</td></tr>';
+        }).join('') : '<tr><td colspan="8" class="muted">No requests yet.</td></tr>') + '</table></div></div>';
+    }
+    if (tab === 'phone') {
+      if (D.needsSchema2) return '<div class="card"><h2>Phone tests</h2><p>Run schema-2.sql in Supabase first (SETUP.md, step 7).</p></div>';
+      var ps = D.phone_sessions.slice().sort(function (a, b) { return a.created_at < b.created_at ? 1 : -1; });
+      var tr = ps.filter(function (x) { return x.reached_post; }), dn = tr.filter(function (x) { return x.completed; });
+      var med = median(dn.map(function (x) { return x.duration_s; })), wrong = tr.length ? (tr.reduce(function (a, x) { return a + x.invalid_count; }, 0) / tr.length).toFixed(1) : '-';
+      return '<div class="card"><h2>Phone-menu test</h2>' +
+        '<p class="muted small">Each time a farmer tries to post a harvest on the phone simulation (Phone page of the public site), one line appears here. Put the farmer’s code in the box on that page first. After the attempt, ask: “Would you do this yourself instead of calling us, and what would stop you?” and write the answer in the Note.</p>' +
+        '<div class="stats">' + statHtml('tried to post', tr.length) + statHtml('finished', dn.length) + statHtml('median seconds (finished)', med == null ? '-' : med) + statHtml('wrong keys per attempt', wrong) + '</div></div>' +
+        '<div class="card scroll"><table><tr><th>When</th><th>Farmer</th><th>How</th><th>Tried</th><th>Finished</th><th>Seconds</th><th>Wrong keys</th><th>Back</th><th>Screens</th><th>Posted</th><th>Note</th><th></th></tr>' +
+        (ps.length ? ps.map(function (x) {
+          return '<tr><td>' + esc((x.created_at || '').slice(0, 16).replace('T', ' ')) + '</td><td>' + esc(x.farmer_code || '-') + '</td><td>' + esc(x.channel) + '</td><td>' + (x.reached_post ? 'yes' : 'no') + '</td><td>' +
+            (x.completed ? '<b>yes</b>' : 'no') + '</td><td>' + x.duration_s + '</td><td>' + x.invalid_count + '</td><td>' + x.back_count + '</td><td class="small">' + esc((x.steps || '').split('>').join(' › ')) + '</td><td>' +
+            (x.completed ? esc(x.crates + ' crates ' + x.variety + ' @ ' + x.price + ', ready ' + x.ready) : '-') + '</td><td>' + esc(x.note) + '</td><td>' +
+            '<button class="link" type="button" data-snote="' + esc(x.id) + '">Note</button>' +
+            (x.completed ? (x.listing_id ? ' <span class="pill">listed</span>' : ' <button class="link" type="button" data-slist="' + esc(x.id) + '">Create listing</button>') : '') + '</td></tr>';
+        }).join('') : '<tr><td colspan="12" class="muted">No attempts yet.</td></tr>') + '</table>' +
+        '<p class="muted small">“Create listing” makes a real harvest from a finished attempt. Do this only after you have called the farmer and they confirmed it. The farmer’s code must exist under Farmers.</p></div>';
+    }
     return '<div class="card"><h2>Export for the learning agenda</h2><p>One row per harvest and buyer answer, with the follow-up on the same row. The file uses codes only. It has no names or phone numbers.</p>' +
-      '<p><button class="primary" type="button" id="dl">Download CSV</button></p>' +
-      '<p class="muted small">Check the free-text columns (reason, would use again, change wanted) for names before sharing the file.</p></div>';
+      '<p><button class="primary" type="button" id="dl">Download harvests CSV</button></p>' +
+      '<p>Buyer requests: one row per request, without names or phone numbers.</p><p><button type="button" id="dlreq">Download requests CSV</button></p>' +
+      '<p>Phone-menu test: one row per attempt.</p><p><button type="button" id="dlph">Download phone tests CSV</button></p>' +
+      '<p class="muted small">Check the free-text columns (reason, would use again, change wanted, message, note) for names before sharing any file.</p></div>';
   }
 
   /* ---------- actions ---------- */
@@ -266,6 +326,23 @@ th{color:var(--mute);font-weight:600}
     if (t.dataset.tab) { tab = t.dataset.tab; setNote(null); dashboardView(); }
     else if (t.dataset.withdraw) { if (confirm('Withdraw this harvest? It will disappear from the public page.')) S.setListingStatus(t.dataset.withdraw, 'withdrawn').then(function () { return reload('Harvest withdrawn.'); }).catch(function (e) { setNote('err', e.message); view(); }); }
     else if (t.id === 'dl') { download(); }
+    else if (t.id === 'dlreq') { saveCsv('harvestlink-requests', requestsCsv()); }
+    else if (t.id === 'dlph') { saveCsv('harvestlink-phone-tests', phoneCsv()); }
+    else if (t.dataset.handled) { S.setEnquiryHandled(t.dataset.handled, t.dataset.to === 'true').then(function () { return reload(t.dataset.to === 'true' ? 'Marked as handled.' : 'Marked as not handled.'); }).catch(function (e) { setNote('err', e.message); view(); }); }
+    else if (t.dataset.snote) {
+      var sess = byId(D.phone_sessions, t.dataset.snote), txt = window.prompt('Note: what they said, where they got stuck (no names)', sess && sess.note || '');
+      if (txt !== null) S.setSessionNote(t.dataset.snote, txt.trim()).then(function () { return reload('Note saved.'); }).catch(function (e) { setNote('err', e.message); view(); });
+    }
+    else if (t.dataset.slist) {
+      var ss = byId(D.phone_sessions, t.dataset.slist), code = String(ss && ss.farmer_code || '').toUpperCase();
+      var fm = D.farmers.filter(function (f) { return String(f.code).toUpperCase() === code; })[0];
+      if (!fm) { setNote('err', 'No farmer has the code “' + (code || 'blank') + '”. Add the farmer under Farmers first, or ask for the code to be typed correctly.'); view(); return; }
+      if (!window.confirm('Create this listing for ' + fm.code + ' ' + fm.display_name + '? Only do this after the farmer confirmed it by phone.')) return;
+      S.addListing({ farmerId: fm.id, variety: ss.variety, crates: ss.crates, price: ss.price, ready: ss.ready, notes: '', postedBy: 'phone' })
+        .then(function (l) { return S.linkSessionListing(ss.id, l.id); })
+        .then(function () { return reload('Listing created' + (fm.consent_given ? '.' : ', but it will not show publicly until the farmer’s consent is recorded.')); })
+        .catch(function (e) { setNote('err', e.message); view(); });
+    }
     else if (t.id === 'out') { S.signOut().then(function () { D = null; setNote(null); view(); }); }
   });
 

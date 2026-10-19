@@ -1,6 +1,7 @@
 /* HarvestLink data layer for the BUILD stage.
    Talks to Supabase with plain fetch (no library, no build step).
-   - Anyone can read consented, active listings (listPublic).
+   - Anyone can read consented, active listings (listPublic), send a buyer request (sendEnquiry) and
+     add one line to the phone-test log (recordPhoneSession). They can read nothing else.
    - Only signed-in coordinators can read or write private data (everything else).
    Every function returns a Promise and throws an Error with a plain message on failure. */
 (function () {
@@ -116,16 +117,44 @@
       ]).then(function (a) { return { farmers: a[0], listings: a[1] }; });
     },
     sendEnquiry: function (e) {
-      /* No "return" asked for: the public key may insert but may not read enquiries back. */
-      return call('POST', 'enquiries', clean({ listing_id: e.listingId, buyer_name: e.buyerName, crates: e.crates, message: e.message }));
+      /* No "return" asked for: the public key may insert but may not read enquiries back.
+         The database refuses the row unless contact_consent is true and a phone number is present (schema-2.sql). */
+      return call('POST', 'enquiries', clean({
+        listing_id: e.listingId, buyer_name: e.buyerName, buyer_phone: e.buyerPhone, crates: e.crates,
+        intent: e.intent, message: e.message, contact_consent: e.consent === true
+      }));
+    },
+    recordPhoneSession: function (s) {
+      /* One line per attempt on the phone simulation. Insert only: the public key cannot read these back. */
+      var d = s.draft || {};
+      return call('POST', 'phone_sessions', clean({
+        farmer_code: s.farmerCode, channel: s.channel, duration_s: s.durationS, reached_post: !!s.reachedPost, completed: !!s.completed,
+        invalid_count: s.invalid, back_count: s.back, steps: s.steps,
+        variety: d.variety, crates: d.crates, price: d.price, ready: d.ready
+      }));
     },
 
     /* ---- coordinator ---- */
     loadAll: function () {
       var t = [['farmers', 'created_at.asc'], ['farmer_private', 'farmer_id.asc'], ['listings', 'created_at.asc'], ['buyers', 'created_at.asc'],
-               ['responses', 'created_at.asc'], ['follow_ups', 'created_at.asc'], ['enquiries', 'created_at.asc']];
-      return Promise.all(t.map(function (x) { return call('GET', x[0] + '?select=*&order=' + x[1]); }))
-        .then(function (r) { var o = {}; t.forEach(function (x, i) { o[x[0]] = r[i]; }); return o; });
+               ['responses', 'created_at.asc'], ['follow_ups', 'created_at.asc'], ['enquiries', 'created_at.asc'], ['phone_sessions', 'created_at.asc']];
+      var needs2 = false;
+      return Promise.all(t.map(function (x) {
+        return call('GET', x[0] + '?select=*&order=' + x[1]).catch(function (err) {
+          /* schema-2.sql not run yet: keep the rest of the page working and say so */
+          if (x[0] === 'phone_sessions' && /not found|Table/.test(err.message)) { needs2 = true; return []; }
+          throw err;
+        });
+      })).then(function (r) { var o = {}; t.forEach(function (x, i) { o[x[0]] = r[i]; }); o.needsSchema2 = needs2; return o; });
+    },
+    setEnquiryHandled: function (id, handled) {
+      return call('PATCH', 'enquiries?id=eq.' + encodeURIComponent(id), { handled: !!handled }, { returning: true }).then(one);
+    },
+    setSessionNote: function (id, note) {
+      return call('PATCH', 'phone_sessions?id=eq.' + encodeURIComponent(id), clean({ note: note }), { returning: true }).then(one);
+    },
+    linkSessionListing: function (id, listingId) {
+      return call('PATCH', 'phone_sessions?id=eq.' + encodeURIComponent(id), { listing_id: listingId }, { returning: true }).then(one);
     },
     addFarmer: function (f, existing) {
       var code = nextCode('F', existing);

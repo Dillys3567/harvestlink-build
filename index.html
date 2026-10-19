@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HarvestLink Marketplace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Public+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="demo-note" id="demo"></div>
+<header class="top">
+  <div class="top-in">
+    <button class="logo" id="logo" type="button" data-go="browse">Harvest<span>Link</span></button>
+    <nav class="nav" id="nav" aria-label="Main"></nav>
+    <span class="muted small" id="who"></span>
+    <!-- Language buttons: add one per language you add in i18n.js -->
+    <div class="role" id="langSeg" role="group" aria-label="Language">
+      <button type="button" data-lang="en" aria-pressed="true">English</button>
+      <button type="button" data-lang="tw" aria-pressed="false">Twi (draft)</button>
+    </div>
+  </div>
+</header>
+<main id="view"></main>
+<footer><span id="footText"></span> <button class="linkish" id="resetBtn" type="button" data-act="reset"></button></footer>
+<div id="overlay"></div>
+<div id="tray"></div>
+<div id="toastHost"></div>
+<script src="data.js"></script>
+<script src="i18n.js"></script>
+<!-- config.js and store.js connect the site to the database. Leave config.js empty to run the sample-data demo. -->
+<script src="config.js"></script>
+<script src="store.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
