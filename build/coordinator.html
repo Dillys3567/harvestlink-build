@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>HarvestLink Coordinator</title>
+<style>
+:root{--bg:#EDE8DC;--card:#FAF8F2;--ink:#2A2418;--mute:#6B6454;--line:#D8D0BE;--moss:#3E4F2A;--moss-ink:#fff;--clay:#B03A2E;--ochre:#C98A1E;--ok:#3E6B2A;--bad:#9E2F27}
+@media (prefers-color-scheme:dark){:root{--bg:#1E1B14;--card:#28241A;--ink:#F1EBDC;--mute:#B5AC96;--line:#443E2E;--moss:#8FB06A;--moss-ink:#16210B;--clay:#E4806F;--ok:#9CCB7A;--bad:#F09284}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:1.15rem;margin:0;flex:1}
+header h1 span{color:var(--clay)}
+main{max-width:1000px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+h2{font-size:1.05rem;margin:0 0 8px}
+.muted{color:var(--mute)}.small{font-size:.875rem}
+label{display:block;font-weight:600;font-size:.875rem;margin:10px 0 4px}
+input,select,textarea,button{font:inherit}
+input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+textarea{min-height:60px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:9px 14px;font-weight:600}
+button.primary{background:var(--moss);border-color:var(--moss);color:var(--moss-ink)}
+button.link{border:0;background:none;padding:0;color:var(--clay);text-decoration:underline;font-weight:500}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.tabs button[aria-pressed=true]{background:var(--moss);color:var(--moss-ink);border-color:var(--moss)}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mute);font-weight:600}
+.scroll{overflow-x:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+.stat b{display:block;font-size:1.4rem}
+.msg{padding:10px 12px;border-radius:8px;margin:10px 0;font-weight:600}
+.msg.err{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad)}
+.msg.ok{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:.8rem}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.check{display:flex;gap:8px;align-items:flex-start;font-weight:500;margin-top:12px}
+.check input{width:auto;margin-top:4px}
+@media (max-width:520px){main{padding:10px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Harvest<span>Link</span> Coordinator</h1>
+  <span class="muted small" id="who"></span>
+  <button id="out" type="button" hidden>Sign out</button>
+</header>
+<main id="app"></main>
+<script src="config.js"></script>
+<script src="store.js"></script>
+<script>
+(function () {
+  'use strict';
+  var S = window.HL_STORE, app = document.getElementById('app');
+  var D = null, tab = 'farmers', note = null;
+  var VARIETIES = ['Pectomech', 'Power Rano', 'Roma VF', 'Local round', 'Other'];
+  var KINDS = ['trader', 'market woman', 'wholesaler', 'retailer', 'processor', 'other'];
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function today() { var d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  function dayNum(s) { return Math.round(Date.parse(s + 'T00:00:00Z') / 86400000); }
+  function byId(list, id) { return list.filter(function (x) { return x.id === id; })[0]; }
+  function setNote(kind, text) { note = text ? { kind: kind, text: text } : null; }
+  function opts(list, val, label) { return list.map(function (x) { var v = typeof x === 'string' ? x : x[val]; var l = typeof x === 'string' ? x : label(x); return '<option value="' + esc(v) + '">' + esc(l) + '</option>'; }).join(''); }
+
+  /* ---------- derived data ---------- */
+  function listingCodes() {
+    var seen = {}, map = {};
+    D.listings.forEach(function (l) {
+      var f = byId(D.farmers, l.farmer_id), fc = f ? f.code : 'F?';
+      seen[fc] = (seen[fc] || 0) + 1; map[l.id] = fc + '-L' + seen[fc];
+    });
+    return map;
+  }
+  function metrics() {
+    var L = D.listings, R = D.responses, F = D.follow_ups;
+    var answered = {}, committedBefore = {}, lead = [];
+    R.forEach(function (r) {
+      answered[r.listing_id] = true;
+      var l = byId(L, r.listing_id);
+      if (r.answer === 'committed' && l && dayNum(r.created_at.slice(0, 10)) < dayNum(l.ready)) {
+        var d = dayNum(l.ready) - dayNum(r.created_at.slice(0, 10));
+        if (!(r.listing_id in committedBefore) || d > committedBefore[r.listing_id]) committedBefore[r.listing_id] = d;
+      }
+    });
+    Object.keys(committedBefore).forEach(function (k) { lead.push(committedBefore[k]); });
+    var posted = L.length, shown = Object.keys(answered).length, committed = Object.keys(committedBefore).length;
+    var crates = 0, lost = 0, onTime = 0, onTimeKnown = 0;
+    F.forEach(function (f) {
+      var l = byId(L, f.listing_id);
+      if (f.on_time != null) { onTimeKnown++; if (f.on_time) onTime++; }
+      if (l && f.rejected_crates != null && f.cheap_crates != null) { crates += l.crates; lost += f.rejected_crates + f.cheap_crates; }
+    });
+    return {
+      posted: posted, shown: shown, committed: committed,
+      rate: posted ? Math.round(100 * committed / posted) + '%' : '-',
+      lead: lead.length ? (lead.reduce(function (a, b) { return a + b; }, 0) / lead.length).toFixed(1) + ' days' : '-',
+      followed: F.length, onTime: onTimeKnown ? onTime + ' of ' + onTimeKnown : '-',
+      lost: crates ? Math.round(100 * lost / crates) + '%' : '-'
+    };
+  }
+
+  /* ---------- CSV export (codes only: no names, no phone numbers) ---------- */
+  function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function buildCsv() {
+    var codes = listingCodes();
+    var head = ['listing_code', 'farmer_code', 'town', 'variety', 'crates', 'price_per_crate', 'ready_date', 'posted_by', 'listing_created',
+      'buyer_code', 'buyer_kind', 'answer', 'committed_crates', 'committed_price', 'needed_on', 'reason', 'answer_date', 'committed_before_ready',
+      'harvest_on_time', 'days_off', 'crates_sold', 'crates_rejected', 'crates_sold_cheap', 'would_use_again', 'change_wanted'];
+    var rows = [head];
+    D.listings.forEach(function (l) {
+      var f = byId(D.farmers, l.farmer_id) || {}, fu = D.follow_ups.filter(function (x) { return x.listing_id === l.id; })[0] || {};
+      var rs = D.responses.filter(function (r) { return r.listing_id === l.id; });
+      if (!rs.length) rs = [null];
+      rs.forEach(function (r) {
+        var b = r ? (byId(D.buyers, r.buyer_id) || {}) : {};
+        rows.push([codes[l.id], f.code, f.town, l.variety, l.crates, l.price, l.ready, l.posted_by, (l.created_at || '').slice(0, 10),
+          b.code, b.kind, r && r.answer, r && r.crates, r && r.price, r && r.needed_on, r && r.reason, r && r.created_at.slice(0, 10),
+          r ? (r.answer === 'committed' ? (dayNum(r.created_at.slice(0, 10)) < dayNum(l.ready) ? 'yes' : 'no') : '') : '',
+          fu.on_time == null ? '' : (fu.on_time ? 'yes' : 'no'), fu.days_off, fu.sold_crates, fu.rejected_crates, fu.cheap_crates, fu.would_use_again, fu.change_wanted]);
+      });
+    });
+    return '﻿' + rows.map(function (r) { return r.map(csvCell).join(','); }).join('\r\n');
+  }
+  function download() {
+    var blob = new Blob([buildCsv()], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'harvestlink-test-' + today() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  /* ---------- views ---------- */
+  function noteHtml() { return note ? '<div class="msg ' + note.kind + '" role="status">' + esc(note.text) + '</div>' : ''; }
+  function signInView() {
+    var cfgOk = S.configured();
+    app.innerHTML = '<div class="card" style="max-width:420px;margin:24px auto"><h2>Coordinator sign-in</h2>' +
+      '<p class="muted small">Only coordinators can see farmer and buyer details. Farmers and buyers never need to sign in.</p>' +
+      (cfgOk ? '' : '<div class="msg err">Database not configured. Fill in config.js.</div>') + noteHtml() +
+      '<form id="signin"><label for="em">Email</label><input id="em" type="email" autocomplete="username" required>' +
+      '<label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required>' +
+      '<p><button class="primary" type="submit">Sign in</button></p></form></div>';
+  }
+  function statHtml(label, val) { return '<div class="stat"><b>' + esc(val) + '</b><span class="muted small">' + esc(label) + '</span></div>'; }
+  function dashboardView() {
+    var m = metrics();
+    var tabs = [['farmers', '1 Farmers'], ['listings', '2 Listings'], ['buyers', '3 Buyers'], ['answers', '4 Buyer answers'], ['followup', '5 Follow-up'], ['export', 'Export']];
+    app.innerHTML = noteHtml() +
+      '<div class="card"><h2>Test so far</h2><div class="stats">' +
+      statHtml('harvests posted', m.posted) + statHtml('shown to a buyer', m.shown) + statHtml('committed before ready date', m.committed) +
+      statHtml('commitment rate', m.rate) + statHtml('average lead time', m.lead) + statHtml('followed up', m.followed) +
+      statHtml('harvested on time', m.onTime) + statHtml('unsold or sold cheap', m.lost) + '</div>' +
+      '<p class="muted small">Small numbers show direction, not proof. Report counts, not just percentages.</p></div>' +
+      '<div class="tabs" role="group" aria-label="Sections">' + tabs.map(function (t) { return '<button type="button" data-tab="' + t[0] + '" aria-pressed="' + (tab === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
+      '<div id="panel"></div>';
+    document.getElementById('panel').innerHTML = panel();
+  }
+  function consentBlock(prefix) {
+    return '<label class="check"><input type="checkbox" id="' + prefix + 'consent"> Consent was read out and the person agreed</label>' +
+      '<label for="' + prefix + 'cn">How and when (no ID numbers)</label><input id="' + prefix + 'cn" placeholder="e.g. agreed by phone, 26 Oct">';
+  }
+  function panel() {
+    if (tab === 'farmers') {
+      return '<div class="card"><h2>Add a farmer</h2><form id="f-farmer"><div class="grid">' +
+        '<div><label for="fd">Name buyers will see</label><input id="fd" required maxlength="80" placeholder="e.g. Farm near Techiman"></div>' +
+        '<div><label for="ff">Farm name</label><input id="ff"></div><div><label for="ft">Town</label><input id="ft"></div><div><label for="fr">Region</label><input id="fr"></div>' +
+        '<div><label for="fn">Real name (private)</label><input id="fn"></div><div><label for="fp">Phone (private)</label><input id="fp" inputmode="tel"></div></div>' +
+        consentBlock('f') + '<p><button class="primary" type="submit">Save farmer</button></p></form></div>' +
+        '<div class="card scroll"><h2>Farmers (' + D.farmers.length + ')</h2><table><tr><th>Code</th><th>Shown as</th><th>Town</th><th>Consent</th></tr>' +
+        D.farmers.map(function (f) { return '<tr><td>' + esc(f.code) + '</td><td>' + esc(f.display_name) + '</td><td>' + esc(f.town) + '</td><td>' + (f.consent_given ? 'yes' : '<b>no</b>') + '</td></tr>'; }).join('') + '</table></div>';
+    }
+    if (tab === 'listings') {
+      var codes = listingCodes();
+      return '<div class="card"><h2>Post a harvest for a farmer</h2><form id="f-listing"><div class="grid">' +
+        '<div><label for="lf">Farmer</label><select id="lf" required><option value="">Choose</option>' + opts(D.farmers, 'id', function (f) { return f.code + ' ' + f.display_name; }) + '</select></div>' +
+        '<div><label for="lv">Variety</label><select id="lv">' + opts(VARIETIES) + '</select></div>' +
+        '<div><label for="lc">Crates (40 kg)</label><input id="lc" type="number" min="1" required></div>' +
+        '<div><label for="lp">Price per crate (GH₵)</label><input id="lp" type="number" min="1" step="any" required></div>' +
+        '<div><label for="lr">Ready date</label><input id="lr" type="date" required min="' + today() + '"></div>' +
+        '<div><label for="lb">Posted how</label><select id="lb"><option value="coordinator">Coordinator, after a call</option><option value="phone">By the farmer on a phone</option><option value="farmer">By the farmer on the web</option></select></div></div>' +
+        '<label for="ln">Notes</label><textarea id="ln" maxlength="500"></textarea><p><button class="primary" type="submit">Post harvest</button></p></form>' +
+        '<p class="muted small">Only farmers marked as consented appear on the public page.</p></div>' +
+        '<div class="card scroll"><h2>Harvests (' + D.listings.length + ')</h2><table><tr><th>Code</th><th>Variety</th><th>Crates</th><th>Price</th><th>Ready</th><th>Status</th><th></th></tr>' +
+        D.listings.map(function (l) {
+          return '<tr><td>' + esc(codes[l.id]) + '</td><td>' + esc(l.variety) + '</td><td>' + l.crates + '</td><td>' + l.price + '</td><td>' + esc(l.ready) + '</td><td><span class="pill">' + esc(l.status) + '</span></td><td>' +
+            (l.status === 'active' ? '<button class="link" data-withdraw="' + esc(l.id) + '" type="button">Withdraw</button>' : '') + '</td></tr>';
+        }).join('') + '</table></div>';
+    }
+    if (tab === 'buyers') {
+      return '<div class="card"><h2>Add a buyer</h2><form id="f-buyer"><div class="grid">' +
+        '<div><label for="bk">Kind</label><select id="bk">' + opts(KINDS) + '</select></div><div><label for="bt">Town or market</label><input id="bt"></div>' +
+        '<div><label for="bn">Real name (private)</label><input id="bn"></div><div><label for="bp">Phone (private)</label><input id="bp" inputmode="tel"></div></div>' +
+        consentBlock('b') + '<p><button class="primary" type="submit">Save buyer</button></p></form></div>' +
+        '<div class="card scroll"><h2>Buyers (' + D.buyers.length + ')</h2><table><tr><th>Code</th><th>Kind</th><th>Town</th><th>Consent</th></tr>' +
+        D.buyers.map(function (b) { return '<tr><td>' + esc(b.code) + '</td><td>' + esc(b.kind) + '</td><td>' + esc(b.town) + '</td><td>' + (b.consent_given ? 'yes' : '<b>no</b>') + '</td></tr>'; }).join('') + '</table></div>';
+    }
+    if (tab === 'answers') {
+      var cd = listingCodes();
+      return '<div class="card"><h2>Record a buyer’s answer</h2><p class="muted small">A commitment means the buyer stated crates, price and date and agreed to be called when the harvest is ready. “Maybe” and “call me later” are not commitments.</p><form id="f-answer"><div class="grid">' +
+        '<div><label for="al">Harvest</label><select id="al" required><option value="">Choose</option>' + opts(D.listings, 'id', function (l) { return cd[l.id] + ' ' + l.variety + ', ' + l.crates + ' crates'; }) + '</select></div>' +
+        '<div><label for="ab">Buyer</label><select id="ab" required><option value="">Choose</option>' + opts(D.buyers.filter(function (b) { return b.consent_given; }), 'id', function (b) { return b.code + ' ' + (b.kind || ''); }) + '</select></div>' +
+        '<div><label for="aa">Answer</label><select id="aa"><option value="committed">Committed</option><option value="maybe">Maybe</option><option value="declined">Declined</option></select></div>' +
+        '<div><label for="ac">Crates they would take</label><input id="ac" type="number" min="1"></div><div><label for="ap">Price they would pay</label><input id="ap" type="number" min="1" step="any"></div>' +
+        '<div><label for="ad">Date they need them</label><input id="ad" type="date"></div></div>' +
+        '<label for="ar">Their reason, in their own words (no names)</label><textarea id="ar" maxlength="500"></textarea><p><button class="primary" type="submit">Save answer</button></p></form></div>' +
+        '<div class="card scroll"><h2>Answers (' + D.responses.length + ')</h2><table><tr><th>Harvest</th><th>Buyer</th><th>Answer</th><th>Crates</th><th>Price</th><th>Date</th></tr>' +
+        D.responses.map(function (r) { var b = byId(D.buyers, r.buyer_id) || {}; return '<tr><td>' + esc(cd[r.listing_id]) + '</td><td>' + esc(b.code) + '</td><td>' + esc(r.answer) + '</td><td>' + esc(r.crates) + '</td><td>' + esc(r.price) + '</td><td>' + esc(r.created_at.slice(0, 10)) + '</td></tr>'; }).join('') + '</table></div>';
+    }
+    if (tab === 'followup') {
+      var cf = listingCodes();
+      return '<div class="card"><h2>Follow up on the ready date</h2><form id="f-follow"><div class="grid">' +
+        '<div><label for="uf">Harvest</label><select id="uf" required><option value="">Choose</option>' + opts(D.listings, 'id', function (l) { return cf[l.id] + ' ' + l.variety + ', ready ' + l.ready; }) + '</select></div>' +
+        '<div><label for="uh">Harvested on</label><input id="uh" type="date"></div>' +
+        '<div><label for="uo">Within 3 days of the posted date?</label><select id="uo"><option value="">Not known</option><option value="yes">Yes</option><option value="no">No</option></select></div>' +
+        '<div><label for="ud">Days off (late is positive)</label><input id="ud" type="number"></div>' +
+        '<div><label for="us">Crates sold</label><input id="us" type="number" min="0"></div><div><label for="ur">Crates rejected</label><input id="ur" type="number" min="0"></div>' +
+        '<div><label for="uc">Crates sold cheaply</label><input id="uc" type="number" min="0"></div></div>' +
+        '<label for="uw">Would you use this again?</label><textarea id="uw" maxlength="500"></textarea><label for="ux">What would you change?</label><textarea id="ux" maxlength="500"></textarea>' +
+        '<p><button class="primary" type="submit">Save follow-up</button></p></form><p class="muted small">Saving again for the same harvest updates it.</p></div>';
+    }
+    return '<div class="card"><h2>Export for the learning agenda</h2><p>One row per harvest and buyer answer, with the follow-up on the same row. The file uses codes only. It has no names or phone numbers.</p>' +
+      '<p><button class="primary" type="button" id="dl">Download CSV</button></p>' +
+      '<p class="muted small">Check the free-text columns (reason, would use again, change wanted) for names before sharing the file.</p></div>';
+  }
+
+  /* ---------- actions ---------- */
+  function v(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
+  function c(id) { var e = document.getElementById(id); return !!(e && e.checked); }
+  function busy(form, on) { Array.prototype.forEach.call(form.querySelectorAll('button'), function (b) { b.disabled = on; }); }
+
+  function reload(msg) {
+    return S.loadAll().then(function (d) { D = d; setNote('ok', msg); view(); }).catch(function (e) { setNote('err', e.message); view(); });
+  }
+  function view() { D ? dashboardView() : signInView(); document.getElementById('out').hidden = !S.signedIn(); document.getElementById('who').textContent = S.signedIn() ? S.email() : ''; }
+  function run(form, p, okMsg) {
+    busy(form, true);
+    p.then(function () { return reload(okMsg); }).catch(function (e) { setNote('err', e.message); view(); });
+  }
+
+  document.addEventListener('submit', function (ev) {
+    var f = ev.target; ev.preventDefault();
+    if (f.id === 'signin') {
+      busy(f, true);
+      S.signIn(v('em'), document.getElementById('pw').value).then(function () { return S.loadAll(); })
+        .then(function (d) { D = d; setNote(null); view(); })
+        .catch(function (e) { D = null; setNote('err', e.message); view(); });
+    } else if (f.id === 'f-farmer') {
+      if (!c('fconsent')) { setNote('err', 'Tick the box to confirm consent before saving.'); view(); return; }
+      run(f, S.addFarmer({ displayName: v('fd'), farm: v('ff'), town: v('ft'), region: v('fr'), fullName: v('fn'), phone: v('fp'), consent: true, consentNote: v('fcn') }, D.farmers), 'Farmer saved.');
+    } else if (f.id === 'f-listing') {
+      run(f, S.addListing({ farmerId: v('lf'), variety: v('lv'), crates: v('lc'), price: v('lp'), ready: v('lr'), notes: v('ln'), postedBy: v('lb') }), 'Harvest posted.');
+    } else if (f.id === 'f-buyer') {
+      if (!c('bconsent')) { setNote('err', 'Tick the box to confirm consent before saving.'); view(); return; }
+      run(f, S.addBuyer({ kind: v('bk'), town: v('bt'), fullName: v('bn'), phone: v('bp'), consent: true, consentNote: v('bcn') }, D.buyers), 'Buyer saved.');
+    } else if (f.id === 'f-answer') {
+      run(f, S.addResponse({ listingId: v('al'), buyerId: v('ab'), answer: v('aa'), crates: v('ac'), price: v('ap'), neededOn: v('ad'), reason: v('ar') }), 'Answer saved.');
+    } else if (f.id === 'f-follow') {
+      run(f, S.saveFollowUp({ listingId: v('uf'), harvestedOn: v('uh'), onTime: v('uo'), daysOff: v('ud'), sold: v('us'), rejected: v('ur'), cheap: v('uc'), wouldUseAgain: v('uw'), changeWanted: v('ux') }), 'Follow-up saved.');
+    }
+  });
+  document.addEventListener('click', function (ev) {
+    var t = ev.target.closest('button'); if (!t) return;
+    if (t.dataset.tab) { tab = t.dataset.tab; setNote(null); dashboardView(); }
+    else if (t.dataset.withdraw) { if (confirm('Withdraw this harvest? It will disappear from the public page.')) S.setListingStatus(t.dataset.withdraw, 'withdrawn').then(function () { return reload('Harvest withdrawn.'); }).catch(function (e) { setNote('err', e.message); view(); }); }
+    else if (t.id === 'dl') { download(); }
+    else if (t.id === 'out') { S.signOut().then(function () { D = null; setNote(null); view(); }); }
+  });
+
+  document.addEventListener('change', function (ev) {
+    if (ev.target.id !== 'uf') return;   /* pre-fill the follow-up form so saving again never blanks saved values */
+    var f = D.follow_ups.filter(function (x) { return x.listing_id === ev.target.value; })[0];
+    function put(id, val) { var e = document.getElementById(id); if (e) e.value = val == null ? '' : val; }
+    put('uh', f && f.harvested_on); put('uo', f && f.on_time != null ? (f.on_time ? 'yes' : 'no') : ''); put('ud', f && f.days_off);
+    put('us', f && f.sold_crates); put('ur', f && f.rejected_crates); put('uc', f && f.cheap_crates);
+    put('uw', f && f.would_use_again); put('ux', f && f.change_wanted);
+  });
+
+  /* ---------- start ---------- */
+  if (S.signedIn()) {
+    S.isCoordinator().then(function (ok) { if (!ok) throw new Error('This account is not a coordinator.'); return S.loadAll(); })
+      .then(function (d) { D = d; view(); })
+      .catch(function (e) { S.signOut(); setNote('err', e.message); view(); });
+  } else { view(); }
+})();
+</script>
+</body>
+</html>
