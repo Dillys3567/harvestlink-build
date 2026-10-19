@@ -1,8 +1,5 @@
 # HarvestLink BUILD: setup
 
-This folder is the whole test version: the public marketplace, the coordinator page, and the database rules.
-It goes in your **new** GitHub repository (`harvestlink-build`). Do not touch the repository behind the ENTER submission.
-
 ## What is in this folder
 | File | What it does |
 |---|---|
