@@ -142,7 +142,6 @@
         variety: d.variety, crates: d.crates, price: d.price, ready: d.ready
       }));
     },
-
     /* ---- coordinator ---- */
     loadAll: function () {
       var t = [['farmers', 'created_at.asc'], ['farmer_private', 'farmer_id.asc'], ['listings', 'created_at.asc'], ['buyers', 'created_at.asc'],
